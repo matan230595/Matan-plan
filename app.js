@@ -1,21 +1,39 @@
 (function(){
-  // Defaults & constants
+  // Config & constants
   const DEFAULTS = { rowHeight:40, hoursStart:6, hoursEnd:22, gridQuantum:0.25, snapThresholdMinutes:0, enableHourlyField:true };
-  const
-  // Helpers
+  const STORAGE_KEY = 'panda_planner_v1';
+  const DAYS_NAMES = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+
+  // State
+  const PState = {
+    rowHeight: DEFAULTS.rowHeight,
+    hoursStart: DEFAULTS.hoursStart,
+    hoursEnd: DEFAULTS.hoursEnd,
+    gridQuantum: DEFAULTS.gridQuantum,
+    snapThresholdMinutes: DEFAULTS.snapThresholdMinutes,
+    enableHourlyField: DEFAULTS.enableHourlyField,
+    placedBlocks: [],
+    templates: [],
+    history: [],
+    historyIndex: -1,
+    currentDate: startOfWeek(new Date())
+  };
+
+  // Elements
+  const gridRoot = document.getElementById('grid-root');
+
+  // Utilities
   function uid(prefix='b'){ return prefix+'-'+Math.random().toString(36).slice(2,9); }
   function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
   function minutesToDecimal(min){ return min/60; }
   function snapToGrid(decimalHour){ const q=PState.gridQuantum; return Math.round(decimalHour/q)*q; }
   function decimalToTimeString(d){ const hh=Math.floor(d); const mm=Math.round((d-hh)*60); return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`; }
   function startOfWeek(date){ const d=new Date(date); const day=d.getDay(); const diff=(day===0?0:day); d.setDate(d.getDate()-diff); d.setHours(0,0,0,0); return d; }
-  function endOfWeek(date){ const s=startOfWeek(date); const e=new Date(s); e.setDate(s.getDate()+6); e.setHours(23,59,59,999); return e; }
+  function endOfWeek(date){ const s=startOfWeek(date); const e=new Date(s); e.setDate(e.getDate()+6); e.setHours(23,59,59,999); return e; }
   function formatDateISO(d){ return new Date(new Date(d).getTime()-new Date(d).getTimezoneOffset()*60000).toISOString().slice(0,10); }
   function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
   function addWeeks(d,n){ return addDays(d, n*7); }
   function startOfMonth(date){ const d=new Date(date.getFullYear(),date.getMonth(),1); d.setHours(0,0,0,0); return d; }
-  function endOfMonth(date){ const d=new Date(date.getFullYear(),date.getMonth()+1,0); d.setHours(23,59,59,999); return d; }
-  function getDayIndex(targetDate){ const s=startOfWeek(PState.currentDate); const diff=(new Date(targetDate).getTime() - s.getTime())/(864e5); return Math.floor(diff); }
 
   // Persistence
   function persistAll(){
@@ -29,23 +47,25 @@
         templates:PState.templates,
         ts:Date.now()
       }));
-    }catch(e){}
+    }catch(e){ console.warn('persist error',e); }
   }
   function loadAll(){
     try{
       const raw=localStorage.getItem(STORAGE_KEY); if(!raw) return;
       const obj=JSON.parse(raw); if(!obj) return;
       const s=obj.settings||{};
-      if(typeof s.rowHeight==='number') PState.rowHeight=s.rowHeight;
-      if(typeof s.hoursStart==='number') PState.hoursStart=s.hoursStart;
-      if(typeof s.hoursEnd==='number') PState.hoursEnd=s.hoursEnd;
-      if(typeof s.gridQuantum==='number') PState.gridQuantum=s.gridQuantum;
-      if(typeof s.snapThresholdMinutes==='number') PState.snapThresholdMinutes=s.snapThresholdMinutes;
-      if(typeof s.enableHourlyField==='boolean') PState.enableHourlyField=s.enableHourlyField;
-      if(s.currentDate) PState.currentDate = new Date(s.currentDate);
+      Object.assign(PState,{
+        rowHeight: typeof s.rowHeight==='number'?s.rowHeight:PState.rowHeight,
+        hoursStart: typeof s.hoursStart==='number'?s.hoursStart:PState.hoursStart,
+        hoursEnd: typeof s.hoursEnd==='number'?s.hoursEnd:PState.hoursEnd,
+        gridQuantum: typeof s.gridQuantum==='number'?s.gridQuantum:PState.gridQuantum,
+        snapThresholdMinutes: typeof s.snapThresholdMinutes==='number'?s.snapThresholdMinutes:PState.snapThresholdMinutes,
+        enableHourlyField: typeof s.enableHourlyField==='boolean'?s.enableHourlyField:PState.enableHourlyField,
+        currentDate: s.currentDate?new Date(s.currentDate):PState.currentDate
+      });
       if(Array.isArray(obj.placedBlocks)) PState.placedBlocks=obj.placedBlocks;
       if(Array.isArray(obj.templates)) PState.templates=obj.templates;
-    }catch(e){}
+    }catch(e){ console.warn('load error',e); }
   }
 
   // History
@@ -65,7 +85,7 @@
     if(r) r.disabled = PState.historyIndex>=PState.history.length-1;
   }
 
-  // Date labels
+  // Labels
   function updateRangeLabel(){
     const s=startOfWeek(PState.currentDate), e=endOfWeek(PState.currentDate);
     const options = { day:'2-digit', month:'2-digit', year:'numeric' };
@@ -78,21 +98,21 @@
     if(monthTitle) monthTitle.textContent = `תצוגה חודשית — ${m.toLocaleDateString('he-IL',{month:'long',year:'numeric'})}`;
   }
 
-  // Grid positioning
+  // Positioning
   function timeToY(decimalHour){ const headerHeight=40; const offset=decimalHour - PState.hoursStart; return headerHeight + offset * PState.rowHeight; }
   function durationToPx(duration){ return Math.max(Math.round(duration * PState.rowHeight), 6); }
   function dayToLeftPx(day){
     const rows = gridRoot.querySelector('.grid-rows');
-    if(!rows) return {left:70,width:100};
-    const totalWidth = gridRoot.clientWidth || rows.clientWidth || 900;
+    const totalWidth = gridRoot.clientWidth || (rows?rows.clientWidth:900);
     const hoursCol = 70;
     const dayWidth = (totalWidth - hoursCol) / 7;
     const leftPx = hoursCol + day * dayWidth;
     return {left:leftPx, width:dayWidth};
   }
 
-  // Weekly grid build
+  // Build weekly grid
   function buildWeekGrid(){
+    if(!gridRoot){ console.error('grid-root not found'); return; }
     gridRoot.innerHTML='';
     const header=document.createElement('div'); header.className='grid-header';
     const hoursCol=document.createElement('div'); hoursCol.className='cell'; hoursCol.innerText='';
@@ -105,6 +125,7 @@
       header.appendChild(c);
     }
     gridRoot.appendChild(header);
+
     const rowsContainer=document.createElement('div'); rowsContainer.className='grid-rows'; rowsContainer.style.gridTemplateColumns='70px repeat(7,1fr)';
     for(let h=PState.hoursStart; h<PState.hoursEnd; h++){
       const hourCell=document.createElement('div'); hourCell.className='col-hours'; hourCell.style.height=PState.rowHeight+'px'; hourCell.innerText=`${String(h).padStart(2,'0')}:00`;
@@ -127,17 +148,26 @@
     abs.style.height = headerHeight + totalHours * PState.rowHeight + 'px';
     abs.style.pointerEvents='none';
     PState.placedBlocks.forEach(b=>{
-      const idx=getDayIndex(new Date(b.date));
-      if(idx<0 || idx>6) return;
+      const idx = (new Date(b.date).getDay()) - (startOfWeek(PState.currentDate).getDay());
+      const targetDate = new Date(b.date);
+      const sWeek = startOfWeek(PState.currentDate);
+      const diffDays = Math.floor((targetDate - sWeek)/86400000);
+      if(diffDays<0 || diffDays>6) return;
+
       const el=document.createElement('div'); el.className='panda-placed-block'; el.draggable=true; el.dataset.id=b.id; el.style.pointerEvents='auto';
       const earning=(b.income && b.rate)?(b.rate*b.duration):0;
       const rightHtml=`<div style="font-size:12px;opacity:0.9">${decimalToTimeString(b.startHour)} - ${decimalToTimeString(b.startHour+b.duration)}</div>`;
       const moneyHtml = earning ? `<div style="font-size:12px;opacity:0.95">${earning.toFixed(2)}₪</div>` : '';
       el.innerHTML = `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${b.name}</div>${moneyHtml}${rightHtml}`;
+
       const top=timeToY(b.startHour); const h=durationToPx(b.duration);
       el.style.top = top + 'px'; el.style.height=(h-6)+'px';
-      const pos=dayToLeftPx(idx); const leftPct=(pos.left/(gridRoot.clientWidth||pos.left+pos.width))*100; const widthPct=(pos.width/(gridRoot.clientWidth||pos.left+pos.width))*100;
+
+      const pos=dayToLeftPx(diffDays);
+      const leftPct=(pos.left/(gridRoot.clientWidth||pos.left+pos.width))*100;
+      const widthPct=(pos.width/(gridRoot.clientWidth||pos.left+pos.width))*100;
       el.style.left=`calc(${leftPct}% + 8px)`; el.style.width=`calc(${widthPct}% - 16px)`;
+
       attachPlacedBlockHandlers(el);
       abs.appendChild(el);
     });
@@ -172,7 +202,7 @@
     return candidate;
   }
 
-  // DnD for grid
+  // DnD preview
   let dragContext=null, previewEl=null;
   function createPreview(){ if(previewEl) return; previewEl=document.createElement('div'); previewEl.className='panda-preview'; previewEl.style.pointerEvents='none'; document.getElementById('view-container').appendChild(previewEl); }
   function removePreview(){ if(previewEl){ previewEl.remove(); previewEl=null; } }
@@ -184,6 +214,7 @@
     const pos=dayToLeftPx(candidate.dayIndex); const leftPct=(pos.left/(gridRoot.clientWidth||pos.left+pos.width))*100; const widthPct=(pos.width/(gridRoot.clientWidth||pos.left+pos.width))*100;
     previewEl.style.left=`calc(${leftPct}% + 8px)`; previewEl.style.width=`calc(${widthPct}% - 16px)`;
   }
+
   function attachGridHandlers(){
     const cells = gridRoot.querySelectorAll('.grid-cell');
     cells.forEach(c=>{ const clone=c.cloneNode(true); c.parentNode.replaceChild(clone,c); });
@@ -236,19 +267,18 @@
     addBlock({ id:uid(), name:'אירוע חדש', date:candidate.date.toISOString(), startHour:snapped, duration:1, income:false, rate:0, notes:'', type:'general' });
   }
 
-  // Placed block handlers
   function attachPlacedBlockHandlers(el){
     el.addEventListener('dragstart',(ev)=>{ dragContext={type:'placed', blockId:el.dataset.id}; try{ ev.dataTransfer.setData('text/plain', el.dataset.id); }catch(e){} createPreview(); });
     el.addEventListener('dragend', ()=>{ removePreview(); dragContext=null; });
     el.addEventListener('dblclick', ()=>{ openEdit(el.dataset.id); });
   }
 
-  // CRUD blocks
+  // CRUD
   function addBlock(b){ PState.placedBlocks.push(b); pushHistorySnapshot(); persistAll(); renderActiveView(); }
   function updateBlock(id, vals){ const i=PState.placedBlocks.findIndex(x=>x.id===id); if(i===-1) return; PState.placedBlocks[i] = Object.assign({}, PState.placedBlocks[i], vals); pushHistorySnapshot(); persistAll(); renderActiveView(); }
   function removeBlock(id){ const i=PState.placedBlocks.findIndex(x=>x.id===id); if(i===-1) return; PState.placedBlocks.splice(i,1); pushHistorySnapshot(); persistAll(); renderActiveView(); }
 
-  // Weekly summary
+  // Summary
   function updateWeeklySummary(){
     const s=startOfWeek(PState.currentDate);
     const cardsRoot=document.getElementById('summaryCards'); if(cardsRoot) cardsRoot.innerHTML='';
@@ -274,18 +304,17 @@
     if(ar) ar.innerText=avgRate.toFixed(2)+' ₪/שעה';
   }
 
-  // Tab navigation with delegation
+  // Tabs
   document.addEventListener('click', (e)=>{
     const btn = e.target.closest('.tab');
     if(!btn) return;
     e.preventDefault();
     document.querySelectorAll('.tab').forEach(x=> x.classList.remove('active'));
     btn.classList.add('active');
-    const view = btn.dataset.view || 'week';
-    setActiveView(view);
+    setActiveView(btn.dataset.view || 'week');
   });
 
-  // View switching
+  // Views
   function setActiveView(v){
     const w=document.getElementById('week-view');
     const d=document.getElementById('day-view');
@@ -387,7 +416,7 @@
   }
   zoomReset?.addEventListener('click',()=>{ PState.rowHeight=DEFAULTS.rowHeight; applyRowHeight(); persistAll(); renderActiveView(); zoomLabel && (zoomLabel.textContent=PState.rowHeight); });
 
-  // Templates + chips
+  // Templates & chips
   function renderTemplates(){
     const tplRoot=document.getElementById('templatesList'); if(!tplRoot) return; tplRoot.innerHTML='';
     const defaults = [
@@ -414,15 +443,6 @@
         addBlock({ id:uid(), name:meta.name, date:new Date(dateISO).toISOString(), startHour:start, duration:meta.duration, type:meta.type, income: !!meta.income, rate: meta.rate || 0, notes:'' });
       });
     });
-
-    // Aside duplicates
-    const dup = (idFrom,idTo)=>{ const src=document.getElementById(idFrom), dst=document.getElementById(idTo); src && dst && dst.addEventListener('click', ()=> src.click()); };
-    dup('exportJsonBtn','exportJsonBtnAside');
-    dup('exportCsvBtn','exportCsvBtnAside');
-    dup('exportIcsBtn','exportIcsBtnAside');
-    dup('printBtn','printBtnAside');
-    dup('importJsonBtn','importJsonBtnAside');
-    dup('importCsvBtn','importCsvBtnAside');
   }
 
   // Create modal
@@ -454,11 +474,6 @@
     addBlock({ id:uid(), name, date:date.toISOString(), startHour:start, duration, income, rate, notes, type });
     closeCreate();
   });
-  document.getElementById('saveTemplateBtn')?.addEventListener('click', ()=>{
-    const name=cb.name.value||'תבנית חדשה';
-    PState.templates.push({ id:uid('tpl'), name, duration:selectedDuration, type:cb.type.value });
-    persistAll(); renderTemplates(); alert('התבנית נשמרה');
-  });
 
   // Edit modal
   const editBackdrop=document.getElementById('edit-backdrop'), editModal=document.getElementById('edit-modal');
@@ -484,35 +499,17 @@
     updateBlock(editingId, newVals); closeEdit();
   });
 
-  // Settings modal
-  const settingsBackdrop=document.getElementById('settings-backdrop'), settingsModal=document.getElementById('settings-modal');
-  const st = { hs:document.getElementById('setting-hours-start'), he:document.getElementById('setting-hours-end'), rh:document.getElementById('setting-row-height'), q:document.getElementById('setting-quant'), snap:document.getElementById('setting-snap'), hourly:document.getElementById('setting-enable-hourly') };
-  document.getElementById('openSettingsBtn')?.addEventListener('click', ()=>{ st.hs.value=PState.hoursStart; st.he.value=PState.hoursEnd; st.rh.value=PState.rowHeight; st.q.value=String(PState.gridQuantum); st.snap.value=PState.snapThresholdMinutes?String(PState.snapThresholdMinutes):'off'; st.hourly.checked=!!PState.enableHourlyField; settingsBackdrop && (settingsBackdrop.style.display='block'); settingsModal && (settingsModal.style.display='block'); });
-  settingsBackdrop?.addEventListener('click', ()=>{ settingsBackdrop.style.display='none'; settingsModal && (settingsModal.style.display='none'); });
-  document.getElementById('settings-apply')?.addEventListener('click', ()=>{
-    const hs=clamp(parseInt(st.hs.value||PState.hoursStart,10),0,23);
-    const he=clamp(parseInt(st.he.value||PState.hoursEnd,10),1,24);
-    const rh=clamp(parseInt(st.rh.value||PState.rowHeight,10),16,200);
-    const q=parseFloat(st.q.value);
-    const snapVal = st.snap.value==='off'?0:parseInt(st.snap.value,10);
-    const hourly = !!st.hourly.checked;
-    PState.hoursStart=Math.min(hs,he-1); PState.hoursEnd=Math.max(he,hs+1); PState.rowHeight=rh; PState.gridQuantum=q; PState.snapThresholdMinutes=snapVal; PState.enableHourlyField=hourly;
-    document.documentElement.style.setProperty('--row-height', PState.rowHeight+'px');
-    persistAll(); settingsBackdrop && (settingsBackdrop.style.display='none'); settingsModal && (settingsModal.style.display='none'); renderActiveView();
-  });
-  document.getElementById('settings-reset')?.addEventListener('click', ()=>{
-    if(!confirm('לאפס הגדרות?')) return;
-    PState.rowHeight=DEFAULTS.rowHeight; PState.hoursStart=DEFAULTS.hoursStart; PState.hoursEnd=DEFAULTS.hoursEnd; PState.gridQuantum=DEFAULTS.gridQuantum; PState.snapThresholdMinutes=DEFAULTS.snapThresholdMinutes; PState.enableHourlyField=DEFAULTS.enableHourlyField;
-    document.documentElement.style.setProperty('--row-height', PState.rowHeight+'px');
-    persistAll(); settingsBackdrop && (settingsBackdrop.style.display='none'); settingsModal && (settingsModal.style.display='none'); renderActiveView();
-  });
+  // Export / Import
+  function esc(t){ return `"${String(t).replace(/"/g,'""')}"`; }
+  function triggerDownload(url, name){ const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
+  function sanitizeICS(t){ return String(t).replace(/\n/g,'\\n').replace(/,/g,'\\,'); }
 
-  // Export
   document.getElementById('exportJsonBtn')?.addEventListener('click', ()=>{
     const payload={meta:{exportedAt:new Date().toISOString()}, blocks:PState.placedBlocks};
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob); triggerDownload(url,'panda_planner.json');
+    triggerDownload(URL.createObjectURL(blob),'panda_planner.json');
   });
+
   document.getElementById('exportCsvBtn')?.addEventListener('click', ()=>{
     const header=['id','name','date','startHour','duration','start','end','income','rate','notes','type'];
     const rows=PState.placedBlocks.map(b=>{
@@ -521,8 +518,9 @@
     });
     const csv=[header.join(','),...rows].join('\n');
     const blob=new Blob([csv],{type:'text/csv'});
-    const url=URL.createObjectURL(blob); triggerDownload(url,'panda_planner.csv');
+    triggerDownload(URL.createObjectURL(blob),'panda_planner.csv');
   });
+
   document.getElementById('exportIcsBtn')?.addEventListener('click', ()=>{
     function formatDateICS(d){ const YYYY=d.getUTCFullYear(); const MM=String(d.getUTCMonth()+1).padStart(2,'0'); const DD=String(d.getUTCDate()).padStart(2,'0'); const hh=String(d.getUTCHours()).padStart(2,'0'); const mm=String(d.getUTCMinutes()).padStart(2,'0'); const ss=String(d.getUTCSeconds()).padStart(2,'0'); return `${YYYY}${MM}${DD}T${hh}${mm}${ss}Z`; }
     let ics='BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//PandaPlanner//EN\r\n'; const now=new Date();
@@ -543,31 +541,12 @@
     });
     ics+='END:VCALENDAR';
     const blob=new Blob([ics],{type:'text/calendar'});
-    const url=URL.createObjectURL(blob); triggerDownload(url,'panda_planner.ics');
+    triggerDownload(URL.createObjectURL(blob),'panda_planner.ics');
   });
-  document.getElementById('printBtn')?.addEventListener('click', ()=>window.print());
-  document.getElementById('exportSummaryCsv')?.addEventListener('click', ()=>{
-    const s=startOfWeek(PState.currentDate);
-    const rows=['day,date,hours,income'];
-    for(let i=0;i<7;i++){
-      const date=addDays(s,i);
-      let hours=0,income=0;
-      PState.placedBlocks.filter(b=>formatDateISO(b.date)===formatDateISO(date)).forEach(b=>{ hours += Number(b.duration||0); if(b.income && b.rate) income += (b.rate*b.duration); });
-      rows.push(`${DAYS_NAMES[i]},${formatDateISO(date)},${hours.toFixed(2)},${income.toFixed(2)}`);
-    }
-    const csv=rows.join('\n'); const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob); triggerDownload(url,'weekly_summary.csv');
-  });
-  document.getElementById('exportSummaryPdf')?.addEventListener('click', ()=>window.print());
-  document.getElementById('printSummary')?.addEventListener('click', ()=>window.print());
-
-  function esc(t){ return `"${String(t).replace(/"/g,'""')}"`; }
-  function triggerDownload(url, name){ const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
-  function sanitizeICS(t){ return String(t).replace(/\n/g,'\\n').replace(/,/g,'\\,'); }
 
   // Import JSON
   const importFileInput = document.getElementById('importFileInput');
   document.getElementById('importJsonBtn')?.addEventListener('click', ()=> importFileInput?.click());
-  document.getElementById('importJsonBtnAside')?.addEventListener('click', ()=> importFileInput?.click());
   importFileInput?.addEventListener('change', (e)=>{
     const file = e.target.files[0];
     if(!file) return;
@@ -577,86 +556,16 @@
         const obj = JSON.parse(ev.target.result);
         if(Array.isArray(obj.blocks)) {
           PState.placedBlocks = obj.blocks;
-          pushHistorySnapshot();
-          persistAll();
-          renderActiveView();
-          alert('קובץ JSON נטען בהצלחה!');
+          pushHistorySnapshot(); persistAll(); renderActiveView();
+          alert('JSON נטען בהצלחה');
         } else {
-          alert('מבנה JSON לא תקין: מצופה שדה "blocks" כמערך.');
+          alert('מבנה JSON לא תקין: מצופה "blocks"');
         }
-      } catch(err) {
-        alert('שגיאה בקריאת קובץ JSON');
-      }
+      } catch(err) { alert('שגיאה בקריאת JSON'); }
     };
     reader.readAsText(file);
     e.target.value='';
   });
-
-  // Import CSV
-  const importCsvInput = document.getElementById('importCsvInput');
-  document.getElementById('importCsvBtn')?.addEventListener('click', ()=> importCsvInput?.click());
-  document.getElementById('importCsvBtnAside')?.addEventListener('click', ()=> importCsvInput?.click());
-  importCsvInput?.addEventListener('change', (e)=>{
-    const file = e.target.files[0];
-    if(!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev)=>{
-      try{
-        const text = ev.target.result;
-        const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
-        if(!lines.length) { alert('קובץ CSV ריק'); return; }
-        const header = lines[0].split(',').map(h=>h.trim().toLowerCase());
-        const required = ['id','name','date','starthour','duration','income','rate','notes','type'];
-        const ok = required.every(r=>header.includes(r));
-        if(!ok){ alert('כותרות CSV לא תואמות. נדרש: '+required.join(', ')); return; }
-        const idx = Object.fromEntries(header.map((h,i)=>[h,i]));
-        const blocks = [];
-        for(let i=1;i<lines.length;i++){
-          const row = parseCsvLine(lines[i]);
-          if(!row) continue;
-          const id = row[idx['id']] || uid();
-          const name = unescCsv(row[idx['name']]||'אירוע');
-          const dateStr = row[idx['date']];
-          const dateISO = new Date(dateStr).toISOString();
-          const startHour = parseFloat(row[idx['starthour']])||PState.hoursStart;
-          const duration = Math.max(PState.gridQuantum, parseFloat(row[idx['duration']])||PState.gridQuantum);
-          const income = (row[idx['income']]||'').toString().trim()==='1';
-          const rate = parseFloat(row[idx['rate']])||0;
-          const notes = unescCsv(row[idx['notes']]||'');
-          const type = row[idx['type']]||'general';
-          blocks.push({ id, name, date:dateISO, startHour, duration, income, rate, notes, type });
-        }
-        PState.placedBlocks = blocks;
-        pushHistorySnapshot();
-        persistAll();
-        renderActiveView();
-        alert('קובץ CSV נטען בהצלחה!');
-      }catch(err){
-        alert('שגיאה בקריאת קובץ CSV');
-      }
-    };
-    reader.readAsText(file);
-    e.target.value='';
-  });
-
-  function parseCsvLine(line){
-    const res=[]; let cur=''; let inQ=false;
-    for(let i=0;i<line.length;i++){
-      const ch=line[i];
-      if(inQ){
-        if(ch==='"' && line[i+1]==='"'){ cur+='"'; i++; }
-        else if(ch==='"'){ inQ=false; }
-        else { cur+=ch; }
-      }else{
-        if(ch===','){ res.push(cur); cur=''; }
-        else if(ch==='"'){ inQ=true; }
-        else { cur+=ch; }
-      }
-    }
-    res.push(cur);
-    return res;
-  }
-  function unescCsv(s){ return String(s).replace(/^"(.*)"$/,'$1').replace(/""/g,'"'); }
 
   // Keyboard undo/redo
   document.getElementById('undoBtn')?.addEventListener('click', undo);
@@ -668,9 +577,7 @@
     loadAll();
     document.documentElement.style.setProperty('--row-height', PState.rowHeight+'px');
     renderTemplates();
-    const firstTab = document.querySelector('.tab[data-view="week"]');
-    if(firstTab){ firstTab.classList.add('active'); }
-    setActiveView('week');
+    setActiveView('week'); // ensure grid builds
     if(!PState.history.length) pushHistorySnapshot();
   }
   integrate();
