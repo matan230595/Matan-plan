@@ -24,13 +24,8 @@ body.dark{
   --shadow:0 6px 20px rgba(0,0,0,0.35);
 }
 
-html,body{
-  height:100%;
-  margin:0;
-  background:var(--bg);
-  color:var(--text);
-  font-family:Inter,"Segoe UI",Roboto,Arial;
-}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,"Segoe UI",Roboto,Arial}
 
 #app{max-width:1400px;margin:18px auto;padding:14px}
 
@@ -43,6 +38,7 @@ html,body{
 .app-header .left-group{display:flex;gap:10px;align-items:center}
 .brand{margin:0;font-size:18px}
 .hamburger{background:transparent;border:none;color:#fff;font-size:22px;cursor:pointer}
+
 .controls{display:flex;flex-direction:column;gap:8px}
 .controls .row{display:flex;gap:8px;flex-wrap:wrap}
 button{background:#fff;border:1px solid rgba(15,23,40,0.08);padding:8px 10px;border-radius:8px;cursor:pointer}
@@ -146,7 +142,7 @@ button:disabled{opacity:0.55;cursor:default}
 /* Helpers */
 .hidden{display:none}
 
-/* Mobile-first */
+/* Mobile */
 @media (max-width:980px){
   .controls{align-items:flex-start}
 }
